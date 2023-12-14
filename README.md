@@ -15,6 +15,5 @@ shell> ./mysql_repl -c test.yaml
 ![784767b9318df117322a6c8d51026a9](https://github.com/hcymysql/mysql_repl/assets/19261879/8e7c52b9-50c5-4108-814a-1389ae496f31)
 
 ## 注意事项：
-- mysql_stat会一直运行在终端，如需停止按住<ctrl+c>终止。
-- 支持断点续传，会记录binlog信息至当前目录下的binlog_info.txt文件里。
-
+- mysql_repl工具会一直运行在终端，如需停止按住<ctrl+c>终止。
+- 支持断点续传，会实时记录解析后的binlog信息至当前目录下的binlog_info.txt文件里。
