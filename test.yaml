@@ -1,0 +1,20 @@
+source_mysql_settings:
+  host: "192.168.198.239"
+  port: 3336
+  user: "admin"
+  passwd: "hechunyang"
+  database: "test"
+  charset: "utf8mb4"
+
+source_server_id: 413336
+
+binlog_file: "mysql-bin.000074"
+binlog_pos: 4
+
+target_mysql_settings:
+  host: "192.168.198.239"
+  port: 4306
+  user: "admin"
+  passwd: "hechunyang"
+  database: "test"
+  charset: "utf8mb4"
