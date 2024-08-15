@@ -5,7 +5,12 @@
 - 不熟悉MySQL主从复制搭建的新手使用
 
 ## 原理：
-把自己伪装成slave，从源master解析binlog并入库target MySQL端。
+1) 把自己伪装成slave，从源master解析binlog并入库target MySQL端。
+2) 必须按照如下要求设置MySQL这两个参数值
+```
+   binlog_format=ROW
+   binlog_row_image=FULL
+```
 
 ## 使用：
 ```
