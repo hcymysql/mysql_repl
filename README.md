@@ -1,5 +1,4 @@
 # mysql_repl - 轻便型的MySQL binlog replication tool
-# https://github.com/hcymysql/mysql_repl
 
 ## 使用场景：
 - 从MySQL8.0实时解析binlog并复制到MariaDB，适用于将MySQL8.0迁移至MariaDB
