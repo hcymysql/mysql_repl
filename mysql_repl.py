@@ -18,21 +18,41 @@ from pymysqlreplication.event import GtidEvent
 import yaml
 import argparse
 import logging
+import json
 
+
+# 设置日志记录
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-logger.propagate = False  # 防止日志消息传播到根记录器
+logger.propagate = False
 
+# 控制台处理器
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 console_handler.setFormatter(console_format)
 logger.addHandler(console_handler)
 
+# info日志文件处理器
+info_file_handler = logging.FileHandler('mysql_repl_info.log')
+info_file_handler.setLevel(logging.INFO)
+info_file_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+info_file_handler.setFormatter(info_file_format)
+logger.addHandler(info_file_handler)
+
+# error日志文件处理器
+error_file_handler = logging.FileHandler('mysql_repl_error.log')
+error_file_handler.setLevel(logging.ERROR)
+error_file_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+error_file_handler.setFormatter(error_file_format)
+logger.addHandler(error_file_handler)
+
+
+#########################################################################################################################
 def parse_args():
     parser = argparse.ArgumentParser(description='MySQL binlog replication tool')
     parser.add_argument('-c', '--config', type=str, required=True, help='Path to the YAML config file')
-    parser.add_argument('-v', '--version', action='version', version='mysql_repl工具版本号: 1.0.1，更新日期：2023-12-14')
+    parser.add_argument('-v', '--version', action='version', version='mysql_repl工具版本号: 1.0.3，更新日期：2024-08-15')
     return parser.parse_args()
 
 args = parse_args()
@@ -48,64 +68,43 @@ binlog_file = config['binlog_file']
 binlog_pos = config['binlog_pos']
 target_mysql_settings = config['target_mysql_settings']
 
-# 保存 binlog 位置和文件名
 def save_binlog_pos(binlog_file, binlog_pos):
     current_binlog_file = binlog_file
-    if binlog_file is not None:
-        with open('binlog_info.txt', 'w') as f:
-            f.write('{}\n{}'.format(current_binlog_file, binlog_pos))
-        print('Binlog position ({}, {}) saved.'.format(current_binlog_file, binlog_pos))
-    else:
-        with open('binlog_info.txt', 'w') as f:
-            f.write('{}\n{}'.format(current_binlog_file, binlog_pos))
-        print('Binlog position ({}, {}) updated.'.format(current_binlog_file, binlog_pos))
+    with open('binlog_info.txt', 'w') as f:
+        f.write(f'{current_binlog_file}\n{binlog_pos}')
+    print(f'Binlog position ({current_binlog_file}, {binlog_pos}) saved.')
 
-
-# 读取上次保存的 binlog 位置和文件名
 def load_binlog_pos():
     global binlog_file, binlog_pos
     try:
         with open('binlog_info.txt', 'r') as f:
             binlog_file, binlog_pos = f.read().strip().split('\n')
     except FileNotFoundError:
-        binlog_file, binlog_pos = binlog_file, binlog_pos
+        pass
     except Exception as e:
         print('Load binlog position failure:', e)
-        binlog_file, binlog_pos = binlog_file, binlog_pos
-
+    
     return binlog_file, int(binlog_pos)
 
-
-# 退出程序时保存当前的 binlog 文件名和位置点
 def exit_handler(stream, current_binlog_file, binlog_pos):
     stream.close()
-    # save_binlog_pos(current_binlog_file, binlog_pos)
     save_binlog_pos(current_binlog_file, binlog_pos or stream.log_pos)
 
-
-# 在程序被终止时保存当前的 binlog 文件名和位置点
 def save_binlog_pos_on_termination(signum, frame):
     save_binlog_pos(current_binlog_file, binlog_pos or stream.log_pos)
     quit_program()
 
-
-# 退出程序时保存当前的 binlog 文件名和位置点
 def quit_program():
     stream.close()
     target_conn.close()
     exit(0)
 
-
-# 建立连接
 target_conn = pymysql.connect(**target_mysql_settings)
 
 saved_pos = load_binlog_pos()
 
-# 定义队列用于存放 SQL 语句并作为解析 binlog 和执行 SQL 语句的中间件
 sql_queue = Queue()
 
-
-# 定义 SQL 执行函数，从队列中取出 SQL 语句并依次执行
 def sql_worker():
     while True:
         sql = sql_queue.get()
@@ -123,8 +122,6 @@ def sql_worker():
         finally:
             sql_queue.task_done()
 
-
-# 启动 SQL 执行线程
 sql_thread = Thread(target=sql_worker, daemon=True)
 sql_thread.start()
 
@@ -139,10 +136,24 @@ stream = BinLogStreamReader(
 )
 
 
-# 循环遍历解析出来的行事件并存入SQL语句中
+def convert_bytes_keys(obj):
+    if isinstance(obj, dict):
+        return {k.decode('utf-8') if isinstance(k, bytes) else k: convert_bytes_keys(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_bytes_keys(i) for i in obj]
+    elif isinstance(obj, bytes):
+        return obj.decode('utf-8')
+    else:
+        return obj
+
+
+def escape_string(v):
+    return str(v).replace("'", "''")
+
+
 def process_rows_event(binlogevent, stream):
     if hasattr(binlogevent, "schema"):
-        database_name = binlogevent.schema  # 获取数据库名
+        database_name = binlogevent.schema
     else:
         database_name = None
 
@@ -152,68 +163,94 @@ def process_rows_event(binlogevent, stream):
     if isinstance(binlogevent, QueryEvent):
         sql = binlogevent.query
         logger.info(sql)
-        sql_queue.put(sql)  # 将 SQL 语句加入队列
+        sql_queue.put(sql)
     else:
         for row in binlogevent.rows:
             if isinstance(binlogevent, WriteRowsEvent):
-                #print("Table:", binlogevent.table)
-                #print("Database:", database_name)
-                #print("Column Names:", [k for k in row["values"].keys()])
-                #print("Values:", [v for v in row["values"].values()])
-                sql = "INSERT INTO {}({}) VALUES ({});".format(
-                    f"`{database_name}`.`{binlogevent.table}`" if database_name else binlogevent.table,
-                    ','.join(["`{}`".format(k) for k in row["values"].keys()]),
-                    ','.join(["'{}'".format(v) if isinstance(v, (
-                        str, datetime.datetime, datetime.date)) else 'NULL' if v is None else str(v)
-                              for v in row["values"].values()])
-                )
+                columns = []
+                values = []
+                for k, v in row["values"].items():
+                    columns.append(f"`{k}`")
+                    if isinstance(v, (str, datetime.datetime, datetime.date)):
+                        values.append(f"'{escape_string(v)}'")
+                    elif v is None:
+                        values.append('NULL')
+                    elif isinstance(v, dict):
+                        v = convert_bytes_keys(v)
+                        values.append(f"'{escape_string(json.dumps(v, ensure_ascii=False))}'")
+                    elif isinstance(v, bytes):
+                        values.append(f"'{escape_string(v.decode('utf-8'))}'")
+                    else:
+                        values.append(str(v))
+
+                sql = f"INSERT INTO `{database_name}`.`{binlogevent.table}` ({','.join(columns)}) VALUES ({','.join(values)});"
                 logger.info(sql)
-                sql_queue.put(sql)  # 将 SQL 语句加入队列
+                sql_queue.put(sql)
 
             elif isinstance(binlogevent, UpdateRowsEvent):
                 set_values = []
-                for k, v in row["after_values"].items():
-                    if isinstance(v, str):
-                        set_values.append(f"`{k}`='{v}'")
-                    elif isinstance(v, (datetime.datetime, datetime.date)):
-                        set_values.append(f"`{k}`='{v}'")  # 将时间字段转换为字符串形式
-                    else:
-                        set_values.append(f"`{k}`={v}" if v is not None else f"`{k}`= NULL")
-                set_clause = ','.join(set_values)
-
                 where_values = []
-                for k, v in row["before_values"].items():
-                    if isinstance(v, str):
-                        where_values.append(f"`{k}`='{v}'")
-                    elif isinstance(v, (datetime.datetime, datetime.date)):
-                        where_values.append(f"`{k}`='{v}'")  # 添加对时间类型的处理
+                for k, v in row["after_values"].items():
+                    if isinstance(v, (str, datetime.datetime, datetime.date)):
+                        set_values.append(f"`{k}`='{escape_string(v)}'")
+                    elif v is None:
+                        set_values.append(f"`{k}`=NULL")
+                    elif isinstance(v, dict):
+                        v = convert_bytes_keys(v)
+                        set_values.append(f"`{k}`='{escape_string(json.dumps(v, ensure_ascii=False))}'")
+                    elif isinstance(v, bytes):
+                        set_values.append(f"`{k}`='{escape_string(v.decode('utf-8'))}'")
                     else:
-                        where_values.append(f"`{k}`={v}" if v is not None else f"`{k}` IS NULL")
+                        set_values.append(f"`{k}`={v}")
+
+                for k, v in row["before_values"].items():
+                    if isinstance(v, (str, datetime.datetime, datetime.date)):
+                        where_values.append(f"`{k}`='{escape_string(v)}'")
+                    elif v is None:
+                        where_values.append(f"`{k}` IS NULL")
+                    elif isinstance(v, dict):
+                        v = convert_bytes_keys(v)
+                        json_str = json.dumps(v, ensure_ascii=False)
+                        where_values.append(f"JSON_CONTAINS(`{k}`, '{escape_string(json_str)}')")
+                    elif isinstance(v, bytes):
+                        where_values.append(f"`{k}`='{escape_string(v.decode('utf-8'))}'")
+                    else:
+                        where_values.append(f"`{k}`={v}")
+
+                set_clause = ','.join(set_values)
                 where_clause = ' AND '.join(where_values)
 
                 sql = f"UPDATE `{database_name}`.`{binlogevent.table}` SET {set_clause} WHERE {where_clause};"
                 logger.info(sql)
-                sql_queue.put(sql)  # 将 SQL 语句加入队列
+                sql_queue.put(sql)
 
             elif isinstance(binlogevent, DeleteRowsEvent):
-                sql = "DELETE FROM {} WHERE {};".format(
-                    f"`{database_name}`.`{binlogevent.table}`" if database_name else binlogevent.table,
-                    ' AND '.join(
-                        ["`{}`={}".format(k, "'{}'".format(v) if isinstance(v, (str, datetime.datetime, datetime.date))
-                        else 'NULL' if v is None else str(v))
-                         for k, v in row["values"].items()])
-                )
+                where_values = []
+                for k, v in row["values"].items():
+                    if isinstance(v, (str, datetime.datetime, datetime.date)):
+                        where_values.append(f"`{k}`='{escape_string(v)}'")
+                    elif v is None:
+                        where_values.append(f"`{k}` IS NULL")
+                    elif isinstance(v, dict):
+                        v = convert_bytes_keys(v)
+                        json_str = json.dumps(v, ensure_ascii=False)
+                        where_values.append(f"JSON_CONTAINS(`{k}`, '{escape_string(json_str)}')")
+                    elif isinstance(v, bytes):
+                        where_values.append(f"`{k}`='{escape_string(v.decode('utf-8'))}'")
+                    else:
+                        where_values.append(f"`{k}`={v}")
+
+                where_clause = ' AND '.join(where_values)
+                sql = f"DELETE FROM `{database_name}`.`{binlogevent.table}` WHERE {where_clause};"
                 logger.info(sql)
-                sql_queue.put(sql)  # 将 SQL 语句加入队列
+                sql_queue.put(sql)
 
     return binlogevent.packet.log_pos
 
 
-# 循环遍历解析出来的行事件并存入SQL语句中
 while True:
     try:
         for binlogevent in stream:
-            # print(f'binlog: {stream.log_file}, positon: {stream.log_pos}')
             current_binlog_file = stream.log_file
             try:
                 binlog_pos = process_rows_event(binlogevent, stream)
@@ -229,15 +266,12 @@ while True:
     except pymysql.err.OperationalError as e:
         logger.error("MySQL Error {}: {}".format(e.args[0], e.args[1]))
 
-# 等待所有 SQL 语句执行完毕
 sql_queue.join()
 
-# 在程序退出时保存 binlog 位置
 atexit.register(exit_handler, stream, current_binlog_file, binlog_pos)
 
-# 接收 SIGTERM 和 SIGINT 信号
 signal.signal(signal.SIGTERM, save_binlog_pos_on_termination)
 signal.signal(signal.SIGINT, save_binlog_pos_on_termination)
 
-# 关闭连接
 atexit.register(target_conn.close)
+
