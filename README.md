@@ -17,3 +17,5 @@ shell> ./mysql_repl -c test.yaml
 ## 注意事项：
 - mysql_repl工具会一直运行在终端，如需停止按住<ctrl+c>终止。
 - 支持断点续传，会实时记录解析后的binlog信息至当前目录下的binlog_info.txt文件里。
+- 实时同步复制信息记录至mysql_repl_info.log文件里。
+- 实话同步复制报错信息记录至mysql_repl_error.log文件里。
